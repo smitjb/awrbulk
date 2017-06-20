@@ -1,0 +1,23 @@
+Implement getOPt version of awrrpt_bulk
+Make more modular in preparation for parallelisation.
+Protection for config file when no space
+parallelization
+oneshot command line version awrrpt_now db ensnap bsnap
+OPT
+
+Modularisation.
+
+get_job_details()
+get_db_details()
+run_reports()
+make_zip_file()
+update_jobs_details()
+
+call    awr_collect.ksh
+        loop
+            get_db_def
+            call    awr_collect.ksh DB
+                        get_job_details...
+
+
+
