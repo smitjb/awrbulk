@@ -21,6 +21,18 @@
 #      define  report_name  = /tmp/swrf_report_10_11.txt
 #      @@?/rdbms/admin/awrrpti
 
+
+THISDIR=$(dirname $0)
+
+if [ -z "${THISDIR}" ];then
+	THISDIR=$(pwd)
+fi
+if [ "${THISDIR}" = "." ];then
+	THISDIR=$(pwd)
+fi
+     
+
+
 typeset -i bsnap
 typeset -i esnap
 typeset -i osnap

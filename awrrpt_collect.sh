@@ -15,24 +15,34 @@ function look_up_password {
 function get_job_details {
     DBDEF=$1
         
-    grep "^DEF:${DBDEF}" ${PROPSFILE}  | sed 's/:/ /g' 
+    grep "^DEF:${DBDEF}:" ${PROPSFILE}  | sed 's/:/ /g' 
     
 }
 
 function get_db_details {
-    $DB=$1
-    
+    DB=$1
     con=$(get_con $DB)
-    set $con
+    if [ -z ${con} ];then
+        echo "FATAL:get_con failed"
+    else
+        set $con
+    fi
+
     uname=$1
     pwd=$2
     url=$(get_url $DB)
+    if [ -z ${url} ];then
+        echo "FATAL:get_url failed"
+    else
+        set $url
+    fi
+
     set $url
     host=$1
     port=$2
     service=$3
     
-    echo "$uname $pwd $host $port $sid"
+    echo "$uname $pwd $host $port $service"
 }
 
 function update_job_details {
@@ -59,7 +69,7 @@ function make_zip_file {
         instance=$3
         LDBNAME=$4
         zip_file_name=awr_reports_${dbname}_${tstamp}.zip
-        zip -m ${zip_file_name} awr_report_${instance}*.html awr_report_${LDBNAME}*.html
+        zip -m ${zip_file_name} awr_report_${instance}*.html awr_report_${LDBNAME}*.html >/dev/null
         
         echo ${zip_file_name}        
     
@@ -71,9 +81,9 @@ function get_con {
 
 grep "^CON:${DB}" ${PROPSFILE}  | sed 's/:/ /g' | while read rectype dbname uname pwd
 do
-  if [ -z ${pwd} -o ${pwd} = "LOOKUP" ];then
+  if [ -z "${pwd}" -o "${pwd}" = "LOOKUP" ];then
       pwd=$(look_up_password $uname $DB)
-      
+  fi      
   echo "${uname} ${pwd}"
 done
 
@@ -206,6 +216,12 @@ echo "Looping through databases [${DBLIST}] "
 for DBDEF in ${DBLIST}
 do
      jobdetails=$( get_job_details ${DBDEF})
+     if [ -z ${jobdetails} ];then
+        echo "Failed to get job details" 
+     else
+        set ${jobdetails}
+     fi
+
      set ${jobdetails}
      rectype=$1; dbname=$2; instance=$3; lastsnap=$4; lasttime=$5;
     unset LOCAL
@@ -216,8 +232,15 @@ do
     cd ${REPORTDIR}/${instance}
     if [ ! -z "${dbname}" ];then
         echo "Processing $dbname in $instance"
-        set -x
-         details=$(get_db_details $DB)
+
+         details=$(get_db_details $DBDEF)
+         if [ -z ${details} ];then
+             echo "Failed to get db details"
+          else
+             echo "Got details"
+             set $details
+         fi
+
          set $details
          LOCAL=$3:$4/$5
          UNAME=$1
@@ -225,6 +248,7 @@ do
         ORACLE_SID=$instance
         #LOCAL=$(get_url ${dbname} )
         #CRED=$(get_con ${dbname} )
+        CRED=${UNAME}/${PW}
         LDBNAME=$(echo ${dbname} | tr '[A-Z]' '[a-z]' )
         export UNAME PW LOCAL
         if [ ! -z ${SQLBULK_DEBUG} ];then
