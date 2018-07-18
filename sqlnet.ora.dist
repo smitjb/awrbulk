@@ -1,3 +1,4 @@
 # Restricted sqlnet.ora for instant client
-names.directory_path = (EZCONNECT)
+# 
+names.directory_path = (EZCONNECT,TNSNAMES)
 
