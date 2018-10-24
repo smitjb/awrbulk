@@ -5,16 +5,10 @@
 #
 #
 # =============================================================================
-function get_password {
-  db=${1}
-  uname=${2}
 
-#echo "Fetching ${uname} password for ${db}"
-ssh -l oracle ramxtxus370.am.ist.bp.com   grep -i :${db}: /var/opt/oracle/pwfile | grep -i ${uname}| awk -F: ' { print $4 } '
-
-
-
-}
+#
+# MAIN
+#
 
 THISDIR=$(dirname $0)
 
@@ -26,7 +20,11 @@ if [ -z "${THISDIR}" -o "." == "${THISDIR}" ];then
 fi
 REPORTDIR=${THISDIR}/REPORTS
 
+if [ -f ${THISDIR}/dprpt_common/sh ];then
+    . ${THISDIR}/dprpt_common/sh
+fi
 
+GET_SNAPSHOT_QUERY=sprpt_get_snapshot_range.sql
 # Set various directories according to whether there is a full
 # installation or a single directory installation.
 #
@@ -40,7 +38,7 @@ else
     CFGDIR=${THISDIR}
 fi
 
-TMPFILE=${CFGDIR}/sprpt_collect_temp_%%.txt
+TMPFILE=${CFGDIR}/dbrpt_collect_temp_%%.txt
 
 if [ -f ${CFGDIR}/awrrpt.env ];then
     .  ${CFGDIR}/awrrpt.env
@@ -63,7 +61,7 @@ fi
 PROPSFILE=${1}
 if [ -z "${PROPSFILE}" ];then
     PROPSFILE=${DEFAULT_PROPERTIES}
-else 
+else
 	shift
 fi
 PROPSFILE=${CFGDIR}/${PROPSFILE}
@@ -75,7 +73,7 @@ fi
 # backup the props file
 #
 cp $PROPSFILE $PROPSFILE.pre_backup
-diff $PROPSFILE $PROPSFILE.pre_backup >/dev/null 
+diff $PROPSFILE $PROPSFILE.pre_backup >/dev/null
 if [ $? -ne 0 ];then
 	echo "Diff error backing up $PROPSFILE. Possible space issue"
         exit 1
@@ -85,70 +83,10 @@ if [ ! -z ${SQLBULK_DEBUG} ];then
     SQLDEBUGSILENT=""
 else
     SQLDEBUGSILENT="-s"
-    
+
 fi
 export SQLDEBUGSILENT
 cd ${SQLDIR}
-
-function get_con {
-  DB=${1}
-
-grep "^CON:${DB}" ${PROPSFILE}  | sed 's/:/ /g' | while read rectype dbname uname pwd
-do
-   if [ -z ${uname} ];then
-        return 1
-   fi
-   if [ -z ${pwd} ];then
-        pwd=$(get_password $DB ${uname})
-   fi
-   if [ -z ${pwd} ];then
-        return 1;
-   fi
-  echo "${uname}/${pwd}"
-  return 0;
-done
-
-
-}
-function get_url {
-  DB=${1}
-
-grep "^URL:${DB}" ${PROPSFILE}  | sed 's/:/ /g' | while read rectype dbname host port service
-do
-  if [ -z ${port} ];then
-      echo ${host}    # tns alias only
-    else
-      echo "${host}:${port}/${service}"  # full econnect syntax.
-  fi
-done
-
-}
-
-function test_connection {
- set -x
- echo "[${TNS_ADMIN}]"
- cat ${TNS_ADMIN}/sqlnet.ora
- sqlplus -L ${CRED}@${LOCAL} <<EOSQL
-exit 0
-EOSQL
-if [ $? -ne 0 ];then
-        echo "Connection failed"
-        exit 1
-fi
-
- set +x
-}
-
-    
-function get_snapshot_range {
-    #echo sqlplus  ${SQLDEBUGSILENT} ${CRED}@${LOCAL} 
-    sqlplus  ${SQLDEBUGSILENT} ${CRED}@${LOCAL} <<EOSQL
-set termout on heading off feedback off timing off  verify off
-set linesize 200
-set trimout on
-@${SQLDIR}/sprpt_get_snapshot_range ${1} ${2}
-EOSQL
-}
 
 DBLIST=$*
 if [ -z "${DBLIST}" ];then
@@ -157,59 +95,76 @@ fi
 echo "Looping through databases [${DBLIST}] "
 for DBDEF in ${DBLIST}
 do
-grep "^DEF:${DBDEF}" ${PROPSFILE}  | sed 's/:/ /g' | while read rectype dbname instance lastsnap lasttime
-do
+     jobdetails=$( get_job_details ${DBDEF})
+     if [ -z ${jobdetails} ];then
+        echo "Failed to get job details"
+     else
+        set ${jobdetails}
+     fi
+
+     set ${jobdetails}
+     rectype=$1; dbname=$2; instance=$3; lastsnap=$4; lasttime=$5;
     unset LOCAL
     unset CRED
     if [ ! -d ${REPORTDIR}/${instance} ];then
 	mkdir ${REPORTDIR}/${instance}
     fi
     cd ${REPORTDIR}/${instance}
+    echo "." >xx.log
     if [ ! -z "${dbname}" ];then
         echo "Processing $dbname in $instance"
-        #set -x
+
+         details=$(get_db_details $DBDEF $instance)
+         if [ -z ${details} ];then
+             echo "Failed to get db details"
+          else
+             echo "Got details"
+             set $details
+         fi
+
+         set $details
+         LOCAL=$3:$4/$5
+         UNAME=$1
+         PW=$2
         ORACLE_SID=$instance
-        LOCAL=$(get_url ${dbname} )
-        CRED=$(get_con ${dbname} )
+        #LOCAL=$(get_url ${dbname} )
+        #CRED=$(get_con ${dbname} )
+        CRED=${UNAME}/${PW}
         LDBNAME=$(echo ${dbname} | tr '[A-Z]' '[a-z]' )
-        export CRED LOCAL
+        export UNAME PW LOCAL
         if [ ! -z ${SQLBULK_DEBUG} ];then
-            echo "[ ${CRED} | ${LOCAL} ]"
-            test_connection
+            echo "[ ${UNAME} | ${PW} | ${LOCAL} ]"
+            test_connection ${UNAME} ${PW}  ${LOCAL}
         fi
-        get_snapshot_range $dbname $lastsnap | while read bsnap esnap dbid sid db instnum ver host
-        do
-            if [ ! -z ${bsnap} ];then
-                tstamp=$( date +%Y%m%d%H%M%S)
-                if [ ! -z ${SQLBULK_DEBUG} ];then
-                    echo "[$bsnap, $esnap, $dbid, $sid, $db,$instnum,$ver, $host ]"
-                fi
-                echo "${BINDIR}/sprpt_bulk.sh $bsnap $esnap $dbid $sid $db ${CRED}@${LOCAL}"
-                ${BINDIR}/sprpt_bulk.sh $bsnap $esnap $dbid $sid $db ${CRED}@${LOCAL}
-                if [ $? -ne 0 ];then
-                    # report error
-                    echo "Error"
-                else
-                    if [ "${RECYCLE_SNAPSHOTS}" = "N" ];then
-                    # update last and process
-                    echo "No error"
-                    sed  -e " /^DEF:$dbname/ d" -e "/^$/ d" <${PROPSFILE}  >$TMPFILE
-                    cat <<-EOCAT >>${TMPFILE}
-DEF:$dbname:$instance:$esnap:$tstamp
-EOCAT
-                    mv ${TMPFILE} ${PROPSFILE}
-                    fi
-                    zip -m statspack_reports_${dbname}_${tstamp}.zip sp_${instance}*.lst sp_${LDBNAME}*.lst
-                    if [ ! -d ${REPORT_LOCATION}/${dbname} ];then
-                        mkdir ${REPORT_LOCATION}/${dbname}
-                    fi
-                    mv  statspack_reports_${dbname}_${tstamp}.zip  ${REPORT_LOCATION}/${dbname}
-                fi
-            
+        range=$(get_snapshot_range $dbname $lastsnap)
+        set $range
+        bsnap=$1;esnap=$2;dbid=$3; sid=$4; db=$5; instnum=$6; ver=$7; host=$8;
+        if [ ! -z ${bsnap} ];then
+            tstamp=$( date +%Y%m%d%H%M%S)
+            if [ ! -z ${SQLBULK_DEBUG} ];then
+                echo "[$bsnap, $esnap, $dbid, $sid, $db,$instnum,$ver, $host ]"
             fi
-            
-        done
+            echo "${BINDIR}/awrrpt_bulk.sh $bsnap $esnap $dbid $sid $db ${UNAME}@${LOCAL}"
+            ${BINDIR}/awrrpt_bulk.sh -b$bsnap -e$esnap -i$dbid -s$sid -d$db -c${UNAME}/${PW}@${LOCAL} -I
+            if [ $? -ne 0 ];then
+                # report error
+                echo "Error"
+            else
+                if [ "${RECYCLE_SNAPSHOTS}" = "N" ];then
+                    # update last and process
+                    update_job_details  $dbname $instance $esnap $tstamp
+                fi
+set -x
+                zipfile=$(make_zip_file ${dbname} ${tstamp} ${instance} ${LDBNAME})
+                #zip -m awr_reports_${dbname}_${tstamp}.zip awr_report_${instance}*.html awr_report_${LDBNAME}*.html
+                if [ ! -d ${REPORT_LOCATION}/${dbname} ];then
+                    mkdir ${REPORT_LOCATION}/${dbname}
+                fi
+                mv ${zipfile} ${REPORT_LOCATION}/${dbname}
+                #mv  awr_reports_${dbname}_${tstamp}.zip  ${REPORT_LOCATION}/${dbname}
+            fi
+
+        fi
     fi
 cd ${THISDIR}
-done
 done

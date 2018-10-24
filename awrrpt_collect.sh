@@ -6,141 +6,10 @@
 #
 # =============================================================================
 
-function look_up_password {
-    UNAME=$1
-    SID=$2
-      echo "look_up_password[$SID][$UNAME][$pwd]" >>xx.log
-    ssh ramxtxus370.am.ist.bp.com "grep -i :${UNAME}: /var/opt/oracle/pwfile | nawk -F: -v SAD=$SID '\$2==SAD  { print \$4 }';"
-
-}
-function get_job_details {
-    DBDEF=$1
-        
-    grep "^DEF:${DBDEF}:" ${PROPSFILE}  | sed 's/:/ /g' 
-    
-}
-
-function get_db_details {
-set -x
-    DB=$1
-    INST=$2
-    con=$(get_con $DB $INST)
-    echo "get_db_details[$DB][$con]" >>xx.log
-
-    if [ -z ${con} ];then
-        echo "FATAL:get_con failed"
-    else
-        set $con
-    fi
-
-    uname=$1
-    pwd=$2
-    url=$(get_url $DB)
-    if [ -z ${url} ];then
-        echo "FATAL:get_url failed"
-    else
-        set $url
-    fi
-
-    set $url
-    host=$1
-    port=$2
-    service=$3
-    
-    echo "$uname $pwd $host $port $service"
-set +x
-}
-
-function update_job_details {
-    dbname=$1
-    instance=$2
-    esnap=$3
-    tstamp=$4
-    
-    # lock file
-    # update last and process
-    echo "No error"
-    echo "Updating [$dbname] with [$esnap]"
-    sed  -e " /^DEF:$dbname/ d" -e "/^$/ d" <${PROPSFILE}  >$TMPFILE
-    cat <<-EOCAT >>${TMPFILE}
-DEF:$dbname:$instance:$esnap:$tstamp
-EOCAT
-    mv ${TMPFILE} ${PROPSFILE}
-   # unlock file 
-}
-
-function make_zip_file {
-        dbname=$1
-        tstamp=$2
-        instance=$3
-        LDBNAME=$4
-        zip_file_name=awr_reports_${dbname}_${tstamp}.zip
-        zip -m ${zip_file_name} awr_report_${instance}*.html awr_report_${LDBNAME}*.html >/dev/null
-        
-        echo ${zip_file_name}        
-    
-}
-
-
-function get_con {
-  DB=${1}
-  INST=$2
-grep "^CON:${DB}:" ${PROPSFILE}  |  sed 's/:/ /g' | while read rectype dbname uname pwd
-do
-  if [ -z "${pwd}" -o "${pwd}" = "LOOKUP" ];then
-      echo "get_con 1[$DB][$uname][$pwd]" >>xx.log
-      pwd=$(look_up_password $uname $INST)
-  fi      
-      echo "get_con 2[$DB][$uname][$pwd]" >>xx.log
-  echo "${uname} ${pwd}"
-done
-
-}
-function get_url {
-  DB=${1}
-
-grep "^URL:${DB}" ${PROPSFILE}  | sed 's/:/ /g' | while read rectype dbname host port service
-do
-  if [ -z ${port} ];then
-      echo ${host}    # tns alias only
-    else
-      echo "${host} ${port} ${service}"  # full econnect syntax.
-  fi
-done
-
-}
-
-function test_connection {
-    U=$1
-    P=$2
-    L=$3
- set -x
- echo "[${TNS_ADMIN}]"
- cat ${TNS_ADMIN}/sqlnet.ora
- sqlplus -L ${U}/${P}@${L} <<EOSQL
-exit 0
-EOSQL
-if [ $? -ne 0 ];then
-        echo "Connection failed"
-        exit 1
-fi
-
- set +x
-}
-
-
-function get_snapshot_range {
-    sqlplus  ${SQLDEBUGSILENT} ${CRED}@${LOCAL} <<EOSQL
-set termout on heading off feedback off timing off  verify off
-set linesize 200
-set trimout on
-@${SQLDIR}/awrrpt_get_snapshot_range ${1} ${2}
-EOSQL
-}
-
 #
 # MAIN
 #
+
 THISDIR=$(dirname $0)
 
 if [ -z "${THISDIR}" -o "." == "${THISDIR}" ]; then
@@ -151,7 +20,11 @@ if [ -z "${THISDIR}" -o "." == "${THISDIR}" ];then
 fi
 REPORTDIR=${THISDIR}/REPORTS
 
+if [ -f ${THISDIR}/dprpt_common/sh ];then
+    . ${THISDIR}/dprpt_common/sh
+fi
 
+GET_SNAPSHOT_QUERY=awrpt_get_snapshot_range.sql
 # Set various directories according to whether there is a full
 # installation or a single directory installation.
 #
@@ -165,7 +38,7 @@ else
     CFGDIR=${THISDIR}
 fi
 
-TMPFILE=${CFGDIR}/awrrpt_collect_temp_%%.txt
+TMPFILE=${CFGDIR}/dbrpt_collect_temp_%%.txt
 
 if [ -f ${CFGDIR}/awrrpt.env ];then
     .  ${CFGDIR}/awrrpt.env
@@ -200,7 +73,7 @@ fi
 # backup the props file
 #
 cp $PROPSFILE $PROPSFILE.pre_backup
-diff $PROPSFILE $PROPSFILE.pre_backup >/dev/null 
+diff $PROPSFILE $PROPSFILE.pre_backup >/dev/null
 if [ $? -ne 0 ];then
 	echo "Diff error backing up $PROPSFILE. Possible space issue"
         exit 1
@@ -215,7 +88,6 @@ fi
 export SQLDEBUGSILENT
 cd ${SQLDIR}
 
-
 DBLIST=$*
 if [ -z "${DBLIST}" ];then
   DBLIST=$( grep "^DEF:" ${PROPSFILE} | awk -F: '{ print $2 }' )
@@ -225,7 +97,7 @@ for DBDEF in ${DBLIST}
 do
      jobdetails=$( get_job_details ${DBDEF})
      if [ -z ${jobdetails} ];then
-        echo "Failed to get job details" 
+        echo "Failed to get job details"
      else
         set ${jobdetails}
      fi
@@ -253,7 +125,7 @@ do
          set $details
          LOCAL=$3:$4/$5
          UNAME=$1
-         PW=$2 
+         PW=$2
         ORACLE_SID=$instance
         #LOCAL=$(get_url ${dbname} )
         #CRED=$(get_con ${dbname} )
@@ -264,7 +136,7 @@ do
             echo "[ ${UNAME} | ${PW} | ${LOCAL} ]"
             test_connection ${UNAME} ${PW}  ${LOCAL}
         fi
-        range=$(get_snapshot_range $dbname $lastsnap) 
+        range=$(get_snapshot_range $dbname $lastsnap)
         set $range
         bsnap=$1;esnap=$2;dbid=$3; sid=$4; db=$5; instnum=$6; ver=$7; host=$8;
         if [ ! -z ${bsnap} ];then
@@ -282,7 +154,7 @@ do
                     # update last and process
                     update_job_details  $dbname $instance $esnap $tstamp
                 fi
-set -x 
+set -x
                 zipfile=$(make_zip_file ${dbname} ${tstamp} ${instance} ${LDBNAME})
                 #zip -m awr_reports_${dbname}_${tstamp}.zip awr_report_${instance}*.html awr_report_${LDBNAME}*.html
                 if [ ! -d ${REPORT_LOCATION}/${dbname} ];then
