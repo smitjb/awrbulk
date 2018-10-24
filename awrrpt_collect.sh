@@ -9,6 +9,7 @@
 function look_up_password {
     UNAME=$1
     SID=$2
+      echo "look_up_password[$SID][$UNAME][$pwd]" >>xx.log
     ssh ramxtxus370.am.ist.bp.com "grep -i :${UNAME}: /var/opt/oracle/pwfile | nawk -F: -v SAD=$SID '\$2==SAD  { print \$4 }';"
 
 }
@@ -20,8 +21,12 @@ function get_job_details {
 }
 
 function get_db_details {
+set -x
     DB=$1
-    con=$(get_con $DB)
+    INST=$2
+    con=$(get_con $DB $INST)
+    echo "get_db_details[$DB][$con]" >>xx.log
+
     if [ -z ${con} ];then
         echo "FATAL:get_con failed"
     else
@@ -43,6 +48,7 @@ function get_db_details {
     service=$3
     
     echo "$uname $pwd $host $port $service"
+set +x
 }
 
 function update_job_details {
@@ -78,12 +84,14 @@ function make_zip_file {
 
 function get_con {
   DB=${1}
-
-grep "^CON:${DB}" ${PROPSFILE}  | sed 's/:/ /g' | while read rectype dbname uname pwd
+  INST=$2
+grep "^CON:${DB}:" ${PROPSFILE}  |  sed 's/:/ /g' | while read rectype dbname uname pwd
 do
   if [ -z "${pwd}" -o "${pwd}" = "LOOKUP" ];then
-      pwd=$(look_up_password $uname $DB)
+      echo "get_con 1[$DB][$uname][$pwd]" >>xx.log
+      pwd=$(look_up_password $uname $INST)
   fi      
+      echo "get_con 2[$DB][$uname][$pwd]" >>xx.log
   echo "${uname} ${pwd}"
 done
 
@@ -230,10 +238,11 @@ do
 	mkdir ${REPORTDIR}/${instance}
     fi
     cd ${REPORTDIR}/${instance}
+    echo "." >xx.log
     if [ ! -z "${dbname}" ];then
         echo "Processing $dbname in $instance"
 
-         details=$(get_db_details $DBDEF)
+         details=$(get_db_details $DBDEF $instance)
          if [ -z ${details} ];then
              echo "Failed to get db details"
           else
@@ -273,6 +282,7 @@ do
                     # update last and process
                     update_job_details  $dbname $instance $esnap $tstamp
                 fi
+set -x 
                 zipfile=$(make_zip_file ${dbname} ${tstamp} ${instance} ${LDBNAME})
                 #zip -m awr_reports_${dbname}_${tstamp}.zip awr_report_${instance}*.html awr_report_${LDBNAME}*.html
                 if [ ! -d ${REPORT_LOCATION}/${dbname} ];then
